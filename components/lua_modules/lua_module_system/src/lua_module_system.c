@@ -14,9 +14,50 @@
 #include "esp_netif.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "driver/temperature_sensor.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lauxlib.h"
+
+/* Temperature sensor singleton */
+static temperature_sensor_handle_t g_temp_sensor = NULL;
+static bool g_temp_sensor_installed = false;
+
+static esp_err_t lua_module_system_temp_init(void)
+{
+    if (g_temp_sensor_installed) {
+        return ESP_OK;
+    }
+    temperature_sensor_config_t tsens_config =
+        TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    esp_err_t ret = temperature_sensor_install(&tsens_config, &g_temp_sensor);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    ret = temperature_sensor_enable(g_temp_sensor);
+    if (ret != ESP_OK) {
+        temperature_sensor_uninstall(g_temp_sensor);
+        g_temp_sensor = NULL;
+        return ret;
+    }
+    g_temp_sensor_installed = true;
+    return ESP_OK;
+}
+
+static int lua_module_system_temp(lua_State *L)
+{
+    esp_err_t ret = lua_module_system_temp_init();
+    if (ret != ESP_OK) {
+        return luaL_error(L, "system.temp: sensor init failed (0x%x)", ret);
+    }
+    float celsius = 0.0f;
+    ret = temperature_sensor_get_celsius(g_temp_sensor, &celsius);
+    if (ret != ESP_OK) {
+        return luaL_error(L, "system.temp: read failed (0x%x)", ret);
+    }
+    lua_pushnumber(L, (lua_Number)celsius);
+    return 1;
+}
 
 #if (configUSE_TRACE_FACILITY == 1)
 static const char *lua_module_system_task_state_name(eTaskState state)
@@ -340,6 +381,9 @@ int luaopen_system(lua_State *L)
 
     lua_pushcfunction(L, lua_module_system_ip);
     lua_setfield(L, -2, "ip");
+
+    lua_pushcfunction(L, lua_module_system_temp);
+    lua_setfield(L, -2, "temp");
 
     lua_pushcfunction(L, lua_module_system_info);
     lua_setfield(L, -2, "info");
